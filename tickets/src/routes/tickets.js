@@ -267,11 +267,19 @@ async function ticketsRoutes(fastify, options) {
       }
 
       // Verificar que el usuario sea el asignado o el autor
-      if (ticket.asignado_id !== userId && ticket.autor_id !== userId) {
+      // DESPUÉS - cualquier miembro del grupo puede mover
+      const { data: miembro } = await supabase
+        .from('grupo_usuarios')   // ← dime cómo se llama tu tabla real
+        .select('id')
+        .eq('grupo_id', ticket.grupo_id)
+        .eq('usuario_id', userId)
+        .single();
+
+      if (!miembro) {
         return reply.code(403).send({
           statusCode: 403,
           intOpCode: 'ERR403',
-          data: { error: 'No tienes permiso para mover este ticket' }
+          data: { error: 'No perteneces a este grupo' }
         });
       }
 
@@ -331,7 +339,7 @@ async function ticketsRoutes(fastify, options) {
     try {
       const { data: ticket, error: findError } = await supabase
         .from('tickets')
-        .select('autor_id')
+        .select('asignado_id, autor_id, grupo_id')
         .eq('id', id)
         .single();
 

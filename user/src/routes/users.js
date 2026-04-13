@@ -1,28 +1,29 @@
 // user/src/routes/users.js
 const bcrypt = require('bcrypt');
-const pool = require('../db');
+const supabase = require('../db');
 
 async function usersRoutes(fastify, options) {
-  // GET /users - Listar usuarios (requiere permiso user:view)
+  // GET /users - Listar usuarios (sin middleware por ahora)
   fastify.get('/users', async (request, reply) => {
     try {
-      const result = await pool.query(
-        `SELECT id, nombre_completo, username, email, direccion, telefono, last_login, creado_en, permisos_globales
-         FROM usuarios
-         ORDER BY id`
-      );
+      const { data, error } = await supabase
+        .from('usuarios')
+        .select('id, nombre_completo, username, email')
+        .order('id');
+
+      if (error) throw error;
 
       return reply.send({
         statusCode: 200,
         intOpCode: 'SxUS200',
-        data: result.rows
+        data: data
       });
     } catch (error) {
       console.error(error);
       return reply.code(500).send({
         statusCode: 500,
         intOpCode: 'ERR500',
-        data: { error: 'Error interno del servidor' }
+        data: { error: error.message }
       });
     }
   });
@@ -32,14 +33,13 @@ async function usersRoutes(fastify, options) {
     const { id } = request.params;
 
     try {
-      const result = await pool.query(
-        `SELECT id, nombre_completo, username, email, direccion, telefono, last_login, creado_en
-         FROM usuarios
-         WHERE id = $1`,
-        [id]
-      );
+      const { data, error } = await supabase
+        .from('usuarios')
+        .select('id, nombre_completo, username, email')
+        .eq('id', id)
+        .single();
 
-      if (result.rows.length === 0) {
+      if (error || !data) {
         return reply.code(404).send({
           statusCode: 404,
           intOpCode: 'ERR404',
@@ -50,65 +50,33 @@ async function usersRoutes(fastify, options) {
       return reply.send({
         statusCode: 200,
         intOpCode: 'SxUS200',
-        data: result.rows[0]
+        data: data
       });
     } catch (error) {
       console.error(error);
       return reply.code(500).send({
         statusCode: 500,
         intOpCode: 'ERR500',
-        data: { error: 'Error interno del servidor' }
+        data: { error: error.message }
       });
     }
   });
 
-  // PUT /users/:id - Actualizar usuario (requiere permiso user:edit)
+  // PUT /users/:id - Actualizar usuario
   fastify.put('/users/:id', async (request, reply) => {
     const { id } = request.params;
     const { nombre_completo, username, email, direccion, telefono, password } = request.body;
 
     try {
-      // Verificar si el usuario existe
-      const existe = await pool.query('SELECT id FROM usuarios WHERE id = $1', [id]);
-      if (existe.rows.length === 0) {
-        return reply.code(404).send({
-          statusCode: 404,
-          intOpCode: 'ERR404',
-          data: { error: 'Usuario no encontrado' }
-        });
-      }
+      const updateData = {};
+      if (nombre_completo) updateData.nombre_completo = nombre_completo;
+      if (username) updateData.username = username;
+      if (email) updateData.email = email;
+      if (direccion !== undefined) updateData.direccion = direccion;
+      if (telefono !== undefined) updateData.telefono = telefono;
+      if (password) updateData.password = await bcrypt.hash(password, 10);
 
-      let updateFields = [];
-      let updateValues = [];
-      let paramIndex = 1;
-
-      if (nombre_completo) {
-        updateFields.push(`nombre_completo = $${paramIndex++}`);
-        updateValues.push(nombre_completo);
-      }
-      if (username) {
-        updateFields.push(`username = $${paramIndex++}`);
-        updateValues.push(username);
-      }
-      if (email) {
-        updateFields.push(`email = $${paramIndex++}`);
-        updateValues.push(email);
-      }
-      if (direccion !== undefined) {
-        updateFields.push(`direccion = $${paramIndex++}`);
-        updateValues.push(direccion);
-      }
-      if (telefono !== undefined) {
-        updateFields.push(`telefono = $${paramIndex++}`);
-        updateValues.push(telefono);
-      }
-      if (password) {
-        const hashedPassword = await bcrypt.hash(password, 10);
-        updateFields.push(`password = $${paramIndex++}`);
-        updateValues.push(hashedPassword);
-      }
-
-      if (updateFields.length === 0) {
+      if (Object.keys(updateData).length === 0) {
         return reply.code(400).send({
           statusCode: 400,
           intOpCode: 'ERR400',
@@ -116,40 +84,41 @@ async function usersRoutes(fastify, options) {
         });
       }
 
-      updateValues.push(id);
-      const query = `UPDATE usuarios SET ${updateFields.join(', ')} WHERE id = $${paramIndex} RETURNING id, nombre_completo, username, email, direccion, telefono`;
+      const { data, error } = await supabase
+        .from('usuarios')
+        .update(updateData)
+        .eq('id', id)
+        .select('id, nombre_completo, username, email')
+        .single();
 
-      const result = await pool.query(query, updateValues);
+      if (error) throw error;
 
       return reply.send({
         statusCode: 200,
         intOpCode: 'SxUS200',
-        data: result.rows[0]
+        data: data
       });
     } catch (error) {
       console.error(error);
       return reply.code(500).send({
         statusCode: 500,
         intOpCode: 'ERR500',
-        data: { error: 'Error interno del servidor' }
+        data: { error: error.message }
       });
     }
   });
 
-  // DELETE /users/:id - Eliminar usuario (requiere permiso user:delete)
+  // DELETE /users/:id - Eliminar usuario
   fastify.delete('/users/:id', async (request, reply) => {
     const { id } = request.params;
 
     try {
-      const result = await pool.query('DELETE FROM usuarios WHERE id = $1 RETURNING id', [id]);
+      const { error } = await supabase
+        .from('usuarios')
+        .delete()
+        .eq('id', id);
 
-      if (result.rows.length === 0) {
-        return reply.code(404).send({
-          statusCode: 404,
-          intOpCode: 'ERR404',
-          data: { error: 'Usuario no encontrado' }
-        });
-      }
+      if (error) throw error;
 
       return reply.send({
         statusCode: 200,
@@ -161,7 +130,7 @@ async function usersRoutes(fastify, options) {
       return reply.code(500).send({
         statusCode: 500,
         intOpCode: 'ERR500',
-        data: { error: 'Error interno del servidor' }
+        data: { error: error.message }
       });
     }
   });

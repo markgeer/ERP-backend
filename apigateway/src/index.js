@@ -2,8 +2,17 @@
 const fastify = require('fastify')({ logger: true });
 const httpProxy = require('@fastify/http-proxy');
 const rateLimit = require('@fastify/rate-limit');
+const cors = require('@fastify/cors');  // ✅ Agregar
 const config = require('./config');
 const { authMiddleware } = require('./middleware/auth');
+
+// ✅ Registrar CORS (debe ir antes que cualquier otra cosa)
+fastify.register(cors, {
+  origin: true,  // Permite cualquier origen (para desarrollo)
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+});
 
 // Registrar rate limiting
 fastify.register(rateLimit, {
@@ -23,19 +32,11 @@ fastify.addHook('preHandler', async (request, reply) => {
   await authMiddleware(request, reply);
 });
 
-// ============================================
-// PROXY A MICROSERVICIOS
-// ============================================
-
 // Proxy para microservicio USER
 fastify.register(httpProxy, {
   upstream: config.services.user,
   prefix: '/user',
   rewritePrefix: '',
-  preHandler: (request, reply, done) => {
-    // Si es ruta pública, permitir sin validación adicional
-    done();
-  }
 });
 
 // Proxy para microservicio GROUPS
