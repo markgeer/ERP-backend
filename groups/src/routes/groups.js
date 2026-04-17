@@ -46,7 +46,8 @@ async function groupsRoutes(fastify, options) {
   });
 
   // GET /groups/all - Listar todos los grupos (solo con permiso group:view)
-  fastify.get('/groups/all', { preHandler: [require('../middleware/auth').authMiddleware] }, async (request, reply) => {
+  // GET /groups/all - Listar todos los grupos
+  fastify.get('/groups/all', { preHandler: [authMiddleware] }, async (request, reply) => {
     try {
       const { data, error } = await supabase
         .from('grupos')
@@ -240,18 +241,18 @@ async function groupsRoutes(fastify, options) {
   // POST /groups/:id/members - Agregar miembro al grupo (requiere permiso group:add:member)
   fastify.post('/groups/:id/members', { preHandler: [require('../middleware/auth').authMiddleware] }, async (request, reply) => {
     const { id } = request.params;
-    const { email } = request.body;
+    const { email, permisos } = request.body;  // ✅ Asegúrate que esté aquí
+
+    console.log('Body recibido:', request.body); // 👈 Depuración
 
     if (!email) {
       return reply.code(400).send({
-        statusCode: 400,
-        intOpCode: 'ERR400',
+        statusCode: 400, intOpCode: 'ERR400',
         data: { error: 'El email es requerido' }
       });
     }
 
     try {
-      // Buscar usuario por email
       const { data: usuario, error: userError } = await supabase
         .from('usuarios')
         .select('id')
@@ -260,8 +261,7 @@ async function groupsRoutes(fastify, options) {
 
       if (userError || !usuario) {
         return reply.code(404).send({
-          statusCode: 404,
-          intOpCode: 'ERR404',
+          statusCode: 404, intOpCode: 'ERR404',
           data: { error: 'Usuario no encontrado' }
         });
       }
@@ -276,8 +276,7 @@ async function groupsRoutes(fastify, options) {
 
       if (existe) {
         return reply.code(400).send({
-          statusCode: 400,
-          intOpCode: 'ERR400',
+          statusCode: 400, intOpCode: 'ERR400',
           data: { error: 'El usuario ya es miembro del grupo' }
         });
       }
@@ -285,30 +284,45 @@ async function groupsRoutes(fastify, options) {
       // Agregar miembro
       const { error: insertError } = await supabase
         .from('grupo_miembros')
-        .insert({
-          grupo_id: id,
-          usuario_id: usuario.id
-        });
+        .insert({ grupo_id: id, usuario_id: usuario.id });
 
       if (insertError) throw insertError;
 
+      // ✅ Asignar permisos si vienen
+      if (permisos && permisos.length > 0) {
+        console.log('Asignando permisos:', permisos, 'al usuario:', usuario.id);
+        const { error: permError } = await supabase
+          .from('grupo_usuario_permisos')
+          .upsert({
+            grupo_id: id,
+            usuario_id: usuario.id,
+            permisos_grupo: permisos
+          });
+
+        if (permError) {
+          console.error('Error al asignar permisos:', permError);
+          throw permError;
+        }
+      }
+
       return reply.code(201).send({
-        statusCode: 201,
-        intOpCode: 'SxUS201',
-        data: { message: 'Usuario agregado al grupo correctamente' }
+        statusCode: 201, intOpCode: 'SxUS201',
+        data: { id: usuario.id, message: 'Usuario agregado al grupo correctamente' }
       });
     } catch (error) {
       console.error(error);
       return reply.code(500).send({
-        statusCode: 500,
-        intOpCode: 'ERR500',
+        statusCode: 500, intOpCode: 'ERR500',
         data: { error: 'Error interno del servidor' }
       });
     }
   });
 
   // DELETE /groups/:id/members/:userId - Eliminar miembro del grupo (requiere permiso group:delete:member)
-  fastify.delete('/groups/:id/members/:userId', { preHandler: [require('../middleware/auth').authMiddleware] }, async (request, reply) => {
+  fastify.delete('/groups/:id/members/:userId', { 
+    preHandler: [require('../middleware/auth').authMiddleware],
+    schema: { body: null }  // ✅ Agrega esto para que no espere body
+  }, async (request, reply) => {
     const { id, userId } = request.params;
 
     try {

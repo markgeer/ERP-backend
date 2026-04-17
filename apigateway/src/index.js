@@ -2,13 +2,20 @@
 const fastify = require('fastify')({ logger: true });
 const httpProxy = require('@fastify/http-proxy');
 const rateLimit = require('@fastify/rate-limit');
-const cors = require('@fastify/cors');  // ✅ Agregar
+const cors = require('@fastify/cors');
+const { createClient } = require('@supabase/supabase-js');
 const config = require('./config');
 const { authMiddleware } = require('./middleware/auth');
 
+// Conectar a Supabase para logs
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_KEY
+);
+
 // ✅ Registrar CORS (debe ir antes que cualquier otra cosa)
 fastify.register(cors, {
-  origin: true,  // Permite cualquier origen (para desarrollo)
+  origin: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
@@ -25,6 +32,29 @@ fastify.register(rateLimit, {
       data: { error: 'Too many requests, please try again later.' }
     };
   }
+});
+
+// ✅ HOOK para registrar cada petición (se ejecuta después de cada respuesta)
+fastify.addHook('onResponse', async (request, reply) => {
+  const responseTime = reply.elapsedTime;
+  const ip = request.headers['x-forwarded-for'] || request.ip;
+  
+  const logData = {
+    endpoint: request.url,
+    method: request.method,
+    usuario_id: request.user?.userId || null,
+    ip: ip,
+    status_code: reply.statusCode,
+    response_time: Math.round(responseTime),
+    error_message: reply.statusCode >= 400 ? (reply.message || 'Error') : null
+  };
+  
+  // Guardar en Supabase (sin esperar respuesta para no bloquear)
+  supabase.from('logs_api').insert(logData).then(result => {
+    if (result.error) {
+      console.error('Error al guardar log:', result.error);
+    }
+  }).catch(err => console.error('Error:', err));
 });
 
 // Middleware global de autenticación
@@ -51,6 +81,49 @@ fastify.register(httpProxy, {
   upstream: config.services.tickets,
   prefix: '/tickets',
   rewritePrefix: '',
+});
+
+// ✅ Endpoint para ver logs (solo administradores)
+fastify.get('/admin/logs', { preHandler: authMiddleware }, async (request, reply) => {
+  const userPermisos = request.user?.globalPermissions || [];
+  if (!userPermisos.includes(6)) {
+    return reply.code(403).send({
+      statusCode: 403,
+      intOpCode: 'ERR403',
+      data: { error: 'No tienes permiso para ver los logs' }
+    });
+  }
+  
+  const { limit = 100, endpoint, usuario_id } = request.query;
+  
+  let query = supabase
+    .from('logs_api')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(parseInt(limit));
+  
+  if (endpoint) {
+    query = query.eq('endpoint', endpoint);
+  }
+  if (usuario_id) {
+    query = query.eq('usuario_id', parseInt(usuario_id));
+  }
+  
+  const { data, error } = await query;
+  
+  if (error) {
+    return reply.code(500).send({
+      statusCode: 500,
+      intOpCode: 'ERR500',
+      data: { error: error.message }
+    });
+  }
+  
+  return reply.send({
+    statusCode: 200,
+    intOpCode: 'SxUS200',
+    data: data
+  });
 });
 
 // Ruta de health check
@@ -91,6 +164,7 @@ const start = async () => {
     console.log(`   POST /groups/groups - Crear grupo`);
     console.log(`   GET  /tickets/tickets?grupoId=X - Listar tickets`);
     console.log(`   POST /tickets/tickets - Crear ticket`);
+    console.log(`   GET  /admin/logs - Ver logs (solo admin)`);
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);

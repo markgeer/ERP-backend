@@ -105,19 +105,30 @@ async function authRoutes(fastify, options) {
         .update({ last_login: new Date().toISOString() })
         .eq('id', usuario.id);
 
-      // Permisos por grupo
-      const { data: permisosGrupos } = await supabase
+      // Permisos por grupo - consulta más simple
+      const { data: permisosGrupos, error: permError } = await supabase
         .from('grupo_usuario_permisos')
-        .select('permisos_grupo, grupo_id, grupos(nombre)')
+        .select('permisos_grupo, grupo_id')
         .eq('usuario_id', usuario.id);
 
+      console.log('Permisos grupos encontrados:', permisosGrupos);
+
       const permissionsByGroup = {};
-      (permisosGrupos || []).forEach(row => {
-        permissionsByGroup[row.grupo_id] = {
-          grupo_nombre: row.grupos?.nombre,
-          permisos: row.permisos_grupo
-        };
-      });
+      if (permisosGrupos && permisosGrupos.length > 0) {
+        // Obtener nombres de grupos por separado si es necesario
+        for (const row of permisosGrupos) {
+          const { data: grupoData } = await supabase
+            .from('grupos')
+            .select('nombre')
+            .eq('id', row.grupo_id)
+            .single();
+            
+          permissionsByGroup[row.grupo_id] = {
+            grupo_nombre: grupoData?.nombre || 'Sin nombre',
+            permisos: row.permisos_grupo
+          };
+        }
+      }
 
       const token = jwt.sign(
         {
